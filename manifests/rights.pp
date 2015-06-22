@@ -1,154 +1,96 @@
-# == Definition: percona::rights
+# == Define: percona::rights
 #
-# A basic helper used to create a user and
-# grant him some privileges on a database.
+# A basic helper used to create a user and grant him some privileges on a
+# database. Pretty much the same as mysql::rights and should later on be
+# merged?
 #
-# If you are using restricted admin accounts (with a password),
-# you will need to use the mgmt_cnf parameter.
+# TODO: make defaults file more configurable/overridable
 #
-# === Parameters:
+# === Parameters
 #
-# $ensure::   defaults to present
+# Document parameters here
 #
-# $database:: the target database
+# [*ensure*] defaults to present
+# [*database*] the target database
+# [*user*] the target user
+# [*password*] user's password
+# [*host*] target host, default to "localhost"
+# [*priv*] target privileges, defaults to "all" (values are the fieldnames from
+#   mysql.db table).
+# [*grant*] target user also gets the "grant" option
+# [*db_host*] the host running the database
+# [*db_user*] the user used to connect to the db_host
+# [*db_password*] the password used to connect to the db_host
 #
-# $user::     the target user
+# === Examples
 #
-# $password:: user's password
+#  percona::rights { "example case":
+#    user     => "foo",
+#    password => "bar",
+#    database => "mydata",
+#    priv    => ["select_priv", "update_priv"]
+#  }
 #
-# $host::     target host, default to "localhost"
+# === Authors
 #
-# $priv::     target privileges, defaults to "all"
-#             (values are the fieldnames from mysql.db table).
+# Proteon
 #
-# === Format:
+# === Copyright
 #
-# You can ommit the user,host and optionally the database if you use
-# the following format for your resource name:
+# Copyright 2013 Proteon
 #
-#   <user>@<hostmask>/<db_name>
-#   <user>@<hostmask>
-#
-#
-# === Privileges
-#
-#   You can get a list of available privileges you can use by running
-#   the following command:
-#
-#
-#
-#
-# === Example usage:
-#
-#   percona::rights { 'example case':
-#     user     => 'foo',
-#     password => 'bar',
-#     database => 'mydata',
-#     priv     => ['select_priv', 'update_priv'],
-#   }
-#
-#   percona::rights {'bar@10.%/mydata':
-#     hash => '*6C8989366EAF75BB670AD8EA7A7FC1176A95CEF4',
-#     priv => 'all',
-#   }
-#
-#   percona::rights {'monitor@localhost':
-#     database => '*',
-#     password => 'monitor',
-#     priv     => 'select_priv',
-#   }
+
+# We use this modified version from Proteon to give access rights on *.*
+# https://github.com/Proteon/puppet-percona/blob/master/manifests/rights.pp
 #
 define percona::rights (
-  $priv     = 'all',
-  $password = undef,
-  $database = undef,
-  $host     = 'localhost',
-  $user     = undef,
-  $hash     = undef,
-  $ensure   = 'present',
-  $mgmt_cnf = undef
+$database = undef,
+$user = undef,
+$password = undef,
+$host           = 'localhost',
+$ensure         = 'present',
+$priv           = 'all',
+$grant_option   = false,
+$db_host        = 'localhost',
+$db_user        = undef,
+$db_password    = undef,
 ) {
+  $joined_privileges = $priv
 
-  $mycnf = $mgmt_cnf ? {
-    undef   => $::percona::mgmt_cnf,
-    default => $mgmt_cnf,
+  if $grant_option == true {
+    $grant_option_string = ' WITH GRANT OPTION'
+  } else {
+    $grant_option_string = ''
   }
 
-  ## Determine the default user/host to use derived from the resource name.
-  case $name {
-    /^(\w+)@([^ ]+)\/(\w+)$/: {
-      $default_user = $1
-      $default_host = $2
-      $default_database = $3
-    }
-    /^(\w+)@([^ ]+)$/: {
-      $default_user = $1
-      $default_host = $2
-      $default_database = undef
-    }
-    default: {
-      $default_user = undef
-      $default_host = undef
-      $default_database = undef
-    }
+  if $database == '*' {
+    $escquoted_database = $database
+    $quoted_database    = $database
+  } else {
+    $escquoted_database = "\\`${database}\\`"
+    $quoted_database    = "`${database}`"
   }
 
-  if $hash == undef and $password == undef {
-    fail('You must either provide the password hash to use or a plaintext password')
-  }
-  if $user == undef and $default_user == undef {
-    fail('You must define the user parameter or use proper formatting in the name: "user@host/database"')
-  }
-  if $host == undef and $default_host == undef {
-    fail('You must define the host parameter or use proper formatting in the name: "user@host/database"')
-  }
-
-
-  $_user = $user ? {
-    undef   => $default_user,
-    default => $user,
-  }
-
-  ## Host param
-  $_host = $host ? {
-    'localhost' => $default_host,
-    default     => $host,
-  }
-
-  ## Database param
-  $_database = $database ? {
-    undef   => $default_database,
-    default => $database,
-  }
-
-  $grant_name = $_database ? {
-    undef   => "${_user}@${_host}",
-    default => "${_user}@${_host}/${_database}",
-  }
-
-  if ! defined(Mysql_user["${_user}@${_host}"]) {
-    $pwhash = $hash ? {
-      undef   => mysql_password($password),
-      default => $hash,
+  if $ensure == 'present' {
+    $grant_statement = "GRANT ${joined_privileges} ON ${escquoted_database}.* TO '${user}'@'${host}' IDENTIFIED BY '${password}' ${grant_option_string}"
+    if $db_host == 'localhost' {
+      $mysqladmin_cmd = '/usr/bin/mysqladmin'
+      $mysql_cmd      = '/usr/bin/mysql'
+      $required       = undef
+    } else {
+      $mysqladmin_cmd = "/usr/bin/mysqladmin -h ${db_host} -u ${db_user} -p${db_password}"
+      $mysql_cmd      = "/usr/bin/mysql -h ${db_host} -u ${db_user} -p${db_password}"
+      $required       = undef
     }
 
-    mysql_user { "${_user}@${_host}":
-      ensure        => $ensure,
-      password_hash => $pwhash,
-      mgmt_cnf      => $mycnf,
-      require       => [
-        Service[$::percona::service_name],
-      ],
+    exec { "create rights for ${name}" :
+      command     => "${mysql_cmd} mysql -e \"${grant_statement}\" && ${mysqladmin_cmd} flush-privileges",
+      unless      => "${mysql_cmd} mysql -e \"show grants for '${user}'@'${host}'\" | grep \"${quoted_database}.*\" | grep `${mysql_cmd} --skip-column-names -e \"SELECT PASSWORD('${password}')\"`",
+      require     => $required,
+      path        => ['/bin', '/usr/bin', '/usr/local/bin'],
+      logoutput   => true,
     }
+  } else {
+    notify { "WARNING: percona::rights called with name = '${name}' but with ensure = '${ensure}'": }
   }
-
-  mysql_grant { $grant_name:
-    privileges => $priv,
-    mgmt_cnf   => $mycnf,
-    require    => [
-      Service[$::percona::service_name],
-      Mysql_user["${_user}@${_host}"],
-    ]
-  }
-
 }
