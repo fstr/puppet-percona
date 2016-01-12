@@ -22,7 +22,9 @@ class percona::repo::apt {
     # Puppetlabs/apt module
     apt::source { 'percona':
       ensure      => present,
-      include_src => true,
+      include     => {
+        'src' => true,
+      }
       location    => 'http://repo.percona.com/apt',
       release     => $::lsbdistcodename,
       repos       => 'main',
@@ -36,6 +38,4 @@ class percona::repo::apt {
     path        => '/usr/bin',
     refreshonly => true,
   }
-
-
 }
